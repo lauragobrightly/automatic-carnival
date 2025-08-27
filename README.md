@@ -116,3 +116,92 @@ This document describes the technical implementation of our pre-order batching a
 * Ops team: set `next_ship_month/message` around the 25th (unless automated).
 * Ops team: bulk-tag orders `release-now-bN` when inventory lands.
 * All other batch transitions, order tagging, and variant logic are automated.
+
+## Flow Diagrams
+
+### Flow #1 — Monthly Batch Rollover (daily trigger, runs only on the 1st, with pause)
+flowchart TD
+    A[Trigger: Daily @ 9:00 AM PT] --> B{Day of month == "01"?}
+    B -- No --> Z[Exit]
+    B -- Yes --> P{shop.preorder.pause_rollover == true?}
+    P -- Yes --> S1[Slack: "Rollover PAUSED"\nShow next_ship_* values] --> Z
+    P -- No --> C[Set shop.current_batch_number = current + 1]
+    C --> D[Set shop.current_ship_month = shop.next_ship_month]
+    D --> E[Set shop.current_ship_message = shop.next_ship_message]
+    E --> F[Slack: STOP notice]
+    F --> G[Loop products in Auto Pre-Order collection (326055919768)]
+    G --> H[Set product.metafields from shop:\n- preorder.batch_number\n- preorder.ship_month\n- preorder.batch_ship_message\n- preorder.lead_days]
+    H --> I{Loop variants}
+    I -- exclude_from_batch == true --> I2[Skip variant] --> J
+    I -- else --> I1[PreProduct: Take this variant off pre-order] --> I3[PreProduct: Create listing for this variant\nlead_days = variant.lead_days_override || product.lead_days\nship_msg = variant.batch_ship_message_override || product.batch_ship_message] --> J
+    J[Optional: tag product PreOrder-B{batch}] --> K[Slack: START confirmation]
+    K --> Z
+
+### Flow #4 — Inventory Change (rolling, variant-specific auto-preorder)
+flowchart TD
+    A[Trigger: Inventory quantity changed (Variant)] --> B{inventory_quantity <= 0?}
+    B -- No --> Z[Exit]
+    B -- Yes --> C{Variant eligible?\nvariant.variant_auto_preorder == true\nOR product.flow.auto_pre-order == true}
+    C -- No --> Z
+    C -- Yes --> D{variant.preorder.exclude_from_batch == true?}
+    D -- Yes --> Z
+    D -- No --> E[PreProduct: Create listing for this VARIANT\nlead_days = variant.lead_days_override || product.lead_days\nship_msg = variant.batch_ship_message_override || product.batch_ship_message]
+    E --> F[Slack: "Auto-preorder ON: {{product}} / {{variant}} | Batch {{product.preorder.batch_number}} | {{ship_msg}}"]
+    F --> Z
+
+### Flow #5 — Release Fulfillment (manual by design)
+flowchart TD
+    A[Operator: bulk-tag orders 'release-now-bN'] --> B[Trigger: Order tags added]
+    B --> C{tags CONTAIN 'release-now-b'?}
+    C -- No --> Z[Exit]
+    C -- Yes --> D[PreProduct: Release fulfillment hold for this order]
+    D --> E[Order status: On hold → Unfulfilled (visible to 3PL)]
+    E --> F[Slack: "Released fulfillment for Batch N (count n)"]
+    F --> Z
+
+### (Optional) System Overview — Data flow & roles
+flowchart LR
+    subgraph Shop[Shop-level metafields]
+      S1[current_batch_number]
+      S2[current_ship_month/message]
+      S3[current_lead_days]
+      S4[next_ship_month/message]
+      S5[pause_rollover]
+    end
+
+    subgraph Prod[Product-level metafields]
+      P1[batch_number]
+      P2[ship_month]
+      P3[batch_ship_message]
+      P4[lead_days]
+      P5[flow.auto_pre-order]
+    end
+
+    subgraph Var[Variant-level metafields]
+      V1[exclude_from_batch]
+      V2[lead_days_override]
+      V3[batch_ship_message_override]
+      V4[variant_auto_preorder]
+    end
+
+    subgraph Order[Order-level metafields]
+      O1[batch_number (snapshot)]
+      O2[ship_month (snapshot)]
+    end
+
+    S1 --> P1
+    S2 --> P2
+    S2 --> P3
+    S3 --> P4
+
+    P5 -->|eligibility| Var
+    Var -->|overrides| Pre[PreProduct listings]
+
+    Pre --> Ord[Orders]
+    Ord --> O1
+    Ord --> O2
+
+    Inv[Inventory change (variant)] --> Pre
+    Rel[Ops tag 'release-now-bN'] --> Ful[Release holds] --> 3PL[3PL queue]
+
+
