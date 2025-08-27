@@ -117,35 +117,5 @@ This document describes the technical implementation of our pre-order batching a
 * Ops team: bulk-tag orders `release-now-bN` when inventory lands.
 * All other batch transitions, order tagging, and variant logic are automated.
 
-## Flow Diagrams
 
-### Flow #1 — Monthly Batch Rollover
-```mermaid
-flowchart TD
-    A[Trigger: Daily @ 9:00 AM PT] --> B{Day of month == "01"?}
-    B -- No --> Z[Exit]
-    B -- Yes --> P{shop.preorder.pause_rollover == true?}
-    P -- Yes --> S1[Slack: Rollover PAUSED\nShow next_ship_*] --> Z
-    P -- No --> C[Set shop.current_batch_number = current + 1]
-    C --> D[Set shop.current_ship_month = shop.next_ship_month]
-    D --> E[Set shop.current_ship_message = shop.next_ship_message]
-    E --> F[Slack: STOP notice]
-    F --> G[Loop products in Auto Pre-Order collection (326055919768)]
-    G --> H[Set product metafields from shop:\n- batch_number\n- ship_month\n- batch_ship_message\n- lead_days]
-    H --> I{Loop variants}
-    I -- exclude_from_batch == true --> I2[Skip variant] --> J
-    I -- else --> I1[PreProduct: Take variant off pre-order] --> I3[PreProduct: Create listing for variant\nlead_days = variant.lead_days_override || product.lead_days\nship_msg = variant.batch_ship_message_override || product.batch_ship_message] --> J
-    J[Optional: tag product PreOrder-B{batch}] --> K[Slack: START confirmation]
-    K --> Z
-
-flowchart TD
-    A[Trigger: Inventory quantity changed (Variant)] --> B{inventory_quantity <= 0?}
-    B -- No --> Z[Exit]
-    B -- Yes --> C{Eligible?\nvariant.variant_auto_preorder == true\nOR product.flow.auto_pre-order == true}
-    C -- No --> Z
-    C -- Yes --> D{variant.exclude_from_batch == true?}
-    D -- Yes --> Z
-    D -- No --> E[PreProduct: Create listing for VARIANT\nlead_days = variant.lead_days_override || product.lead_days\nship_msg = variant.batch_ship_message_override || product.batch_ship_message]
-    E --> F[Slack: Auto-preorder ON — {{product}} / {{variant}}\nBatch {{product.preorder.batch_number}} | {{ship_msg}}]
-    F --> Z
 
